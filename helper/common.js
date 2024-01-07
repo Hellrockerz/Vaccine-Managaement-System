@@ -5,6 +5,7 @@ function generateOTP() {
     let OTP = Math.floor(random * 900000) + 100000
     return OTP
 }
+
 async function sendMail(email, subject, text) {
     try {
         let transporter = nodemailer.createTransport({
@@ -54,7 +55,7 @@ function createSlots(startTime, endTime, breakTimes, slotDuration) {
     }));
     
     while (currentTime < endTimeObj) {
-        const slotEndTime = new Date(currentTime.getTime() + slotDuration * 60000);
+        const slotEndTime = new Date(currentTime.getTime() + slotDuration * 60 * 1000);
 
         const isBreakTime = breakIntervals.some(interval => currentTime >= interval.start && currentTime < interval.end);
 
@@ -66,7 +67,6 @@ function createSlots(startTime, endTime, breakTimes, slotDuration) {
         currentTime.setTime(currentTime.getTime() + slotDuration * 60000);
     }
 
-    // console.log(slots);
     return slots
 }
 

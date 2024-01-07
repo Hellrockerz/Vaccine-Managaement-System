@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Schema = require("mongoose").Schema;
 const mongoosePaginate = require('mongoose-paginate-v2');
+const aggregatePaginate = require('mongoose-aggregate-paginate-v2')
 
 const centreSchema = new Schema(
     {
@@ -48,5 +49,6 @@ const centreSchema = new Schema(
 );
 
 centreSchema.plugin(mongoosePaginate);
+centreSchema.plugin(aggregatePaginate);
 const centreModel = mongoose.model("centre", centreSchema);
 module.exports = centreModel;

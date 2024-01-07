@@ -1,4 +1,6 @@
 const tokenGenerator = require("../auth/auth").tokenGenerator;
+const express = require('express');
+
 const User = require("../models/userModel");
 const Centre = require("../models/centreModel");
 const Order = require("../models/orderModel");
@@ -9,7 +11,19 @@ const Razorpay = require("razorpay");
 const RAZORPAY_ID_KEY = "rzp_test_WPuv6RsjVAOiGv";
 const RAZORPAY_SECRET_KEY = "kELRmLUimTDEGgAcNj9LoIV0";
 const razorpayWebhookSecret = "hello";
-const io = require("../index").io;
+
+const http = require("http");
+const { Server } = require("socket.io");
+const app = express();
+const server = http.createServer(app);
+const cors = require('cors');
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
 
 const razorpay = new Razorpay({
   key_id: RAZORPAY_ID_KEY,
@@ -31,35 +45,47 @@ async function signup(req, res) {
   const text = `Your OTP is: ${otp}.`;
 
   try {
-    const existingUser = await User.findOne({ $or: [{ email }, { mobileNo }], status: "ACTIVE" });
+    const data = await User.findOne({ $or: [{ email: email }, { mobileNo: mobileNo }], status: "ACTIVE" });
 
-    if (existingUser && existingUser.OTPVerification)
-      return res.status(402).json({ message: "User Already Exists." });
+    if (data && data.OTPVerification === true) {
 
-    if (existingUser && existingUser.email == email && existingUser.mobileNo != mobileNo)
-      return res.status(401).json({ message: "Enter Correct Number associated with the Email" });
+      if (data.mobileNo == mobileNo && data.email !== email) {
+        return res.status(402).json({ message: "Number Already In Use." })
+      }
 
-    if (existingUser && existingUser.mobileNo == mobileNo && existingUser.email !== email)
-      return res.status(402).json({ message: "Enter Correct Email associated with the Number." });
+      else if (data.email == email && data.mobileNo != mobileNo) {
+        return res.status(401).json({ message: "Email Already In Use." })
+      }
 
-    if (!existingUser || password !== cPassword)
-      return res.status(existingUser ? 403 : 405).json({
-        message: existingUser ? "Password and Confirm Password must be the same" : "All Fields Are Required"
-      });
+      else { return res.status(402).json({ message: "User Already Exists." }) }
+    }
+
+    if (data && password !== cPassword) {
+      return res.status(data ? 403 : 405).json({ message: "Password and Confirm Password must be the same" });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userToUpdate = existingUser || new User();
+    const userToUpdate = data || new User();
 
     Object.assign(userToUpdate, {
-      firstName, lastName, username, password: hashedPassword, email, mobileNo,
-      location: { coordinates: [parseFloat(longitude), parseFloat(latitude)] },
-      OTP: otp, expTime: OTPTime
+      firstName,
+      lastName,
+      username,
+      password: hashedPassword,
+      email,
+      mobileNo,
+      location: {
+        coordinates: [parseFloat(longitude), parseFloat(latitude)],
+        type: "Point",
+      },
+      OTP: otp,
+      expTime: OTPTime
     });
 
     const updatedUser = await userToUpdate.save();
     await common.sendMail(email, subject, text);
 
-    return res.status(existingUser ? 201 : 200).json({
+    return res.status(data ? 201 : 200).json({
       message: "Signed Up Successfully",
       data: updatedUser,
     });
@@ -69,11 +95,86 @@ async function signup(req, res) {
   }
 }
 
-async function verifyOTP(req, res) {
-  const { email, mobileNo, otp } = req.body;
+async function resendOTP(req, res) {
+  try {
+    const { emailOrMobileNo } = req.body
+
+    const newOTP = common.generateOTP();
+    const expTime = Date.now() + 5 * 60 * 1000;
+
+    const user = await User.findOne({ $or: [{ email: emailOrMobileNo }, { mobileNo: emailOrMobileNo }], status: "ACTIVE" });
+
+    if (!user) {
+      return res.status(404).json({ message: "User is not Signed Up" });
+    }
+
+    const update = await User.findByIdAndUpdate(
+      { _id: user._id },
+      { $set: { expTime: expTime, OTP: newOTP } },
+      { new: true }
+    );
+
+    if (!update) {
+      return res.status(405).json({ message: "User Not Found" })
+    }
+
+    else {
+      let subject = `New OTP`;
+      let text = `Your new OTP is :${newOTP}`;
+
+      await common.sendMail(user.email, subject, text);
+      return res.status(201).json({ message: "OTP resent succesfully", "New OTP": newOTP })
+    }
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+}
+
+async function forgotPassword(req, res) {
 
   try {
-    const user = await User.findOne({ $or: [{ email }, { mobileNo }], status: "ACTIVE" });
+    const { emailOrMobileNo } = req.body;
+
+    if (!emailOrMobileNo) {
+      return res.status(404).json({ message: "Please Enter Email or Mobile Number" })
+    }
+
+    const newOTP = common.generateOTP();
+    const expTime = Date.now() + 5 * 60 * 1000;
+    const subject = "Forgot Password OTP";
+    const text = `Your forgot password OTP is ${newOTP}`;
+
+    const user = await User.findOne({ $or: [{ email: emailOrMobileNo }, { mobileNo: emailOrMobileNo }], status: "ACTIVE" });
+
+    if (!user) {
+      return res.status(404).json({ message: "User is not Signed Up" });
+    }
+
+    await User.findByIdAndUpdate(
+      { _id: user._id },
+      { $set: { expTime: expTime, OTP: newOTP } },
+      { new: true }
+    );
+
+    await common.sendMail(user.email, subject, text);
+    return res.status(200).json({ message: "OTP Sent Succesfully.", "Your new OTP is": newOTP });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+}
+
+async function verifyOTP(req, res) {
+  const { emailOrMobileNo, otp } = req.body;
+
+  if (!emailOrMobileNo) {
+    return res.status(404).json({ message: "Please Enter Email or Mobile Number" });
+  }
+
+  try {
+    const user = await User.findOne({ $or: [{ email: emailOrMobileNo }, { mobileNo: emailOrMobileNo }], status: "ACTIVE" });
 
     if (!user) {
       return res.status(404).json({ message: "User is not Signed Up" });
@@ -82,15 +183,18 @@ async function verifyOTP(req, res) {
     const currentTime = Date.now();
 
     if (currentTime <= user.expTime) {
-      const isCorrectOTP = otp === user.OTP;
 
-      const updatedUser = await User.findByIdAndUpdate(
-        { _id: user._id }, 
-        { $set: { OTPVerification: isCorrectOTP } }, 
-        { new: true });
+      if (otp === user.OTP) {
 
-      if (isCorrectOTP && updatedUser) {
-        return res.status(200).json({ message: "OTP Verified Successfully" });
+         await User.findOneAndUpdate(
+          { _id: user._id, status: "ACTIVE" },
+          { $set: { OTPVerification: true } },
+          { new: true }
+        );
+
+        const message = "OTP Verified Successfully"
+        return tokenGenerator(res, data, message)
+
       } else {
         return res.status(201).json({ message: "Entered Wrong OTP" });
       }
@@ -103,86 +207,290 @@ async function verifyOTP(req, res) {
   }
 }
 
-async function resendOTP(req, res) {
+async function updatePassword(req, res) {
+  // require token new Password and confrim password, (otp will be verified by verifyOTP)
+  const Id = req.user.id;
+
   try {
-    const data = await User.findOne({ email: req.body.email });
+    const { newPassword, confirmPasword } = req.body;
+
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+    // const data = await User.findOne({ $or: [{ email: emailOrMobileNo }, { mobileNo: emailOrMobileNo }], status: "ACTIVE" });
+
     if (!data) {
-      res.status(404).json({ message: "User is not Signed Up" });
-    } else {
-      try {
-        const newOTP = common.generateOTP();
-        const expTime = Date.now() + 5 * 60 * 1000;
-        let subject = `New OTP`;
-        let text = `Your new OTP is :${newOTP}`;
-        common.sendMail(req.body.email, subject, text);
-        await User.findByIdAndUpdate(
-          { _id: data._id },
-          { $set: { expTime: expTime, OTP: newOTP } }
-        );
-        res
-          .status(201)
-          .json({ message: "OTP resent succesfully", "New OTP": newOTP });
-      } catch (error) {
-        res.status(400).json({ error: "OTP Not Sent" });
-        console.error(error);
-      }
-    }
-  } catch (error) {
-    res.status(500).json({ error: "Internal Server Error" });
-    console.error(error);
-  }
-}
-
-async function login(req, res) {
-  try {
-    const { email, mobileNo, password, otp } = req.body;
-    const user = await User.findOne({ $or: [{ email: email }, { mobileNo: mobileNo }], status: "ACTIVE" });
-
-    if (!user) {
       return res.status(404).json({ message: "User not found" });
-    }
 
-    if (!user.OTPVerification) {
-      return res.status(401).json({ message: "OTP not verified. Cannot log in." });
-    }
+    } else {
+      if (data.OTPVerification === true) {
+        if (newPassword == confirmPasword) {
 
-    const isPasswordCorrect = await bcrypt.compare(password, user.password);
+          await User.findByIdAndUpdate(
+            { _id: data._id },
+            { $set: { password: bcrypt.hashSync(newPassword, 10) } },
+            { new: true }
+          );
+          const message = "Password Updated Succesfully."
+          return tokenGenerator( res, data, message )
 
-    if (isPasswordCorrect) {
-      if (!user.twoFaStatus) {
-        return tokenGenerator(res, user);
-      }
-
-      if (!otp) {
-        return res.status(411).json({ message: "Enter the OTP for Two FA" });
-      }
-
-      const verification = speakeasy.totp.verify({
-        secret: user.secretKey,
-        encoding: "base32",
-        token: otp,
-        window: 2,
-      });
-
-      if (verification) {
-        return tokenGenerator(res, user);
+        } else {
+          return res.status(405).json({ message: "New and Confirm Password Must Be Same." });
+        }
       } else {
-        return res.status(401).json({ message: "Invalid OTP" });
+        return res.status(402).json({ message: "OTP not verified" });
       }
     }
-
-    return res.status(404).json({ message: "Incorrect Password" });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 }
 
+async function resetPassword(req, res) {
+  // require old password, newPassword
+  const Id = req.user.id;
+
+  const { oldPassword, newPassword, confirmPasword } = req.body;
+  try {
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+
+    if (!data) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    // const match = await bcrypt.compare(oldPassword, data.password);
+
+    if (bcrypt.compareSync(oldPassword, data.password) === true) {
+
+      if (newPassword != confirmPasword) {
+        return res.status(405).json({ message: "New and Confirm Password Must Be Same." })
+      }
+
+      const newHashedPassword = await bcrypt.hash(newPassword, 10);
+
+      await User.findOneAndUpdate(
+        { _id: data._id, status: "ACTIVE" },
+        { $set: { password: newHashedPassword } },
+        { new: true }
+      );
+
+      return res.status(200).json({ message: "Password Changed Succesfully" });
+
+    } else {
+      return res.status(406).json({ message: "Enter correct old password" });
+    }
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+}
+
+async function getUserProfile(req, res) {
+
+  const Id = req.user.id;
+  try {
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+
+    if (!data) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    return res.status(200).json({ message: "Users Fetched Successfully", user: data });
+
+  } catch (error) {
+    console.error("Error fetching user profile:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+}
+
+async function updateEmail(req, res) {
+
+  const Id = req.user.id;
+  const { newEmail } = req.body;
+
+  try {
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+
+    if (!data) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    const user = await User.findOne({ email: newEmail , status: "ACTIVE" });
+
+    if (!user) {
+      return res.status(404).json({ message: "Email already in use" })
+    }
+
+    else {
+      await User.findOneAndUpdate(
+        { _id: data._id, status: "ACTIVE" },
+        { $set: { newEmail: newEmail, OTPVerification: false, } },
+        { new: true }
+      );
+      return res.status(201).json({ message: "Email Updated Successfully" });
+
+    }
+  } catch (error) {
+    console.error("Error updating email:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+}
+
+async function deleteAccount(req, res) {
+
+  const Id = req.user.id;
+
+  try {
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+    if (data) {
+
+      await User.findOneAndUpdate(
+        { _id: data._id },
+        { $set: { status: "DELETED" } },
+        { new: true }
+      );
+
+      return res.status(201).json({ message: "Account Deleted Successfully" });
+
+    } else {
+      return res.status(402).json({ message: "User not found" });
+    }
+  } catch (error) {
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+}
+
+async function login(req, res) {
+  try {
+    const { emailOrMobileNo, password} = req.body;
+
+    const user = await User.findOne({ $or: [{ email: emailOrMobileNo }, { mobileNo: emailOrMobileNo }], status: "ACTIVE" });
+
+    console.log(user)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.OTPVerification === false) {
+      return res.status(401).json({ message: "OTP not verified. Cannot log in." });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
+
+    if (isPasswordCorrect === true) {
+
+      if (user.twoFaStatus === false) {
+        return tokenGenerator(res, user)
+      }
+
+      else {
+        return res.status(401).json({ message: "Your 2FA is enabled" })
+      }
+    }
+    return res.status(404).json({ message: "Incorrect Password" });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+}
+
+async function twoFAVerfication(req, res) {
+
+  try {
+
+    const { emailOrMobileNo, otp } = req.body;
+
+    const user = await User.findOne({ $or: [{ email: emailOrMobileNo }, { mobileNo: emailOrMobileNo }], status: "ACTIVE" });
+
+    console.log(user)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.OTPVerification === false) {
+      return res.status(401).json({ message: "OTP not verified. Cannot log in." });
+    }
+
+    if (user.twoFaStatus === false) {
+      return tokenGenerator(res, user);
+    }
+
+    if (!otp) {
+      return res.status(411).json({ message: "Enter the OTP for Two FA" });
+    }
+
+    const verification = speakeasy.totp.verify({
+      secret: user.secretKey,
+      encoding: "base32",
+      token: otp,
+      window: 2,
+    });
+
+    if (verification) {
+      return tokenGenerator(res, user);
+
+    } else {
+      return res.status(401).json({ message: "Invalid OTP" });
+    }
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+
+}
+
+async function updateUserProfile(req, res) {
+
+  const Id = req.user.id;
+  const { firstName, lastName, /*oldpassword, newPassword, cNewPassword,*/ longitude, latitude } = req.body;
+
+  try {
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+
+    if (!data) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (firstName) { data.firstName = firstName; }
+    if (lastName) { data.lastName = lastName; }
+
+    // if (oldpassword && newPassword && cNewPassword) {
+    //   const isPasswordMatch = await bcrypt.compare(oldpassword, data.password);
+
+    //   if (!isPasswordMatch) {
+    //     return res.status(401).json({ message: "Current password is incorrect" });
+    //   }
+
+    //   if (newPassword !== cNewPassword) {
+    //     return res.status(403).json({ message: "New password and confirm password must be the same" });
+    //   }
+
+    //   const hashedPassword = await bcrypt.hash(newPassword, 10);
+    //   data.password = hashedPassword;
+    // }
+
+    if (longitude && latitude) {
+      data.location = { coordinates: [parseFloat(longitude), parseFloat(latitude)] };
+    }
+
+    const updatedUser = await data.save();
+
+    return res.status(200).json({ message: "User profile updated successfully", data: updatedUser });
+  } catch (error) {
+    console.error("Error updating user profile:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
 
 async function getUserList(req, res) {
   try {
-    const Id = req.user.id;
-    const data = await User.findOne({ _id: Id, userType:"ADMIN", status: "ACTIVE" });
+    const userId = req.user.id;
+
+    const data = await User.findOne({ _id: userId, userType: "ADMIN", status: "ACTIVE" });
 
     if (!data) {
       return res.status(404).json({ message: "User does not Exist" });
@@ -191,62 +499,67 @@ async function getUserList(req, res) {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
 
-    const options = {
-      page,
-      limit,
-    };
+    const pipeline = [
+      { $match: { status: "ACTIVE" } },
+      {
+        $project: {
+          _id: 1,
+          username: 1,
+          email: 1,
+          userType: 1,
+          status: 1,
+        },
+      },
+      { $skip: (page - 1) * limit },
+      { $limit: limit },
+    ];
 
-    const result = await User.paginate({ status: "ACTIVE" }, options);
-
-    const userData = result.docs.map((user) => ({
-      _id: user._id,
-      username: user.username,
-      email: user.email,
-      userType: user.userType,
-      status: user.status,
-    }));
+    const result = await User.aggregatePaginate(User.aggregate(pipeline));
 
     const pageInfo = {
       total: result.totalDocs,
       currentPage: result.page,
       perPage: result.limit,
-      totalPages: result.pagingCounter,
+      totalPages: result.totalPages,
     };
 
-    return res.status(200).json({ message: userData, pageInfo });
+    return res.status(200).json({ message: result.docs, pageInfo });
   } catch (error) {
     console.error(error);
-    return res
-      .status(500)
-      .json({ message: "Internal Server Error", error: error.message });
+    return res.status(500).json({ message: "Internal Server Error", error: error.message });
   }
 }
 
 async function createSubAdmin(req, res) {
   try {
-    const id = req.user.id;
-    const { firstName, lastName, email, mobileNo, password } = req.body;
 
-    const admin = await User.findOne({ _id: id });
+    const adminId = req.user.id;
+
+    const { firstName, lastName, email, mobileNo, password, longitude, latitude } = req.body;
+
+    if (!firstName || !lastName || !email || !mobileNo || !password || !longitude || !latitude) {
+      return res.status(401).json({ message: "All fields are required" });
+    }
+
+    const admin = await User.findOne({ _id: adminId, userType: { $in: ["ADMIN", "SUBADMIN"] }, status: "ACTIVE" })
 
     if (!admin) {
-      return res.status(404).json({ message: "User does not Exist" });
+      return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" })
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const subAdminExists = await User.findOne({$or: [{mobileNo : mobileNo}, {email: email}], userType: "SUBADMIN"})
-    if (subAdminExists) {
-      return res.status(402).json({ message: "SUBADMIN Already Exist" });
+    const isSubadmin = await User.findOne({ $or: [{ email: email }, { mobileNo: mobileNo }], status: "ACTIVE" })
+
+    if (isSubadmin) {
+      return res.status(402).json({ message: `USER Already Exist as ${isSubadmin.userType}` });
     }
 
-    if (admin.userType === "ADMIN" || admin.permissionGrant) {
+    if (admin || admin.permissionGrant) {
       const m = mobileNo.toString();
       const username = firstName.toLowerCase() + m.slice(-4);
       const subject = "Vaccination Management System";
-      const text = `You have been appointed as SubAdmin\nBelow are your credentials.\nNEVER SHARE YOUR CREDENTIALS WITH ANYONE\n email: ${email}\nmobileNo:${mobileNo}\npassword:${password}`;
-
-      await common.sendMail(email, subject, text);
+      const text = `You have been appointed as SubAdmin\nBelow are your credentials.\nNEVER SHARE YOUR CREDENTIALS WITH ANYONE\n email:${email}\nmobileNo:${mobileNo}\npassword:${password}`;
 
       const subAdmin = new User({
         firstName,
@@ -257,7 +570,7 @@ async function createSubAdmin(req, res) {
         email,
         mobileNo,
         location: {
-          coordinates: [parseFloat(req.body.longitude), parseFloat(req.body.latitude)],
+          coordinates: [parseFloat(longitude), parseFloat(latitude)],
         },
         userType: "SUBADMIN",
         permissionGrant: false,
@@ -265,12 +578,9 @@ async function createSubAdmin(req, res) {
 
       const newSubAdmin = await subAdmin.save();
 
-      return res.status(200).json({
-        message: "Sub Admin created successfully and they have been notified through email",
-        newSubAdmin,
-      });
-    } else {
-      return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
+      await common.sendMail(email, subject, text);
+
+      return res.status(200).json({ message: "Sub Admin created successfully and they have been notified through email", newSubAdmin, });
     }
   } catch (error) {
     console.error("Error saving user:", error);
@@ -280,88 +590,115 @@ async function createSubAdmin(req, res) {
 
 async function deleteSubAdmin(req, res) {
   try {
+
     const userId = req.user.id;
-    const data = await User.findOne({ _id: userId });
+
+    const userData = await User.findOne({ _id: userId, userType: { $in: ["ADMIN", "SUBADMIN"] }, status: "ACTIVE" })
+
     const { subAdminid } = req.body;
-    if (!data) {
+
+    if (!userData) {
       return res.status(404).json({ error: "User Not Found" });
     }
-    if (!subAdminid) {
-      return res.status(404).json({ error: "subAdminid is required" });
-    }
-    if (data.userType == "ADMIN" || data.permissionGrant) {
-      const data = await User.findOne({
-        _id: subAdminid,
-        userType: "SUBADMIN",
-      });
-      if (data) {
-        if (data.status == "DELETED") {
-          return res
-            .status(404)
-            .json({ error: "Specified SubAdmin Already Delted" });
-        }
-        const deletedSubAdmin = await User.findByIdAndUpdate(
-          { _id: subAdminid },
-          {
-            $set: {
-              status: "DELETED",
-            },
-          },
-          { new: true }
-        );
-        return res
-          .status(200)
-          .json({ message: "Subadmin deleted successfully", deletedSubAdmin });
-      } else {
-        return res.status(404).json({ error: "Specified SubAdmin not found" });
-      }
-    } else {
+
+    if (!(userData || userData.permissionGrant)) {
       return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
     }
+
+    if (!subAdminid) {
+      return res.status(400).json({ error: "subAdminid is required" });
+    }
+
+    const subAdminData = await User.findOne({ _id: subAdminid, userType: "SUBADMIN", status: "ACTIVE" })
+
+    if (!subAdminData) {
+      return res.status(404).json({ error: "SUBADMIN Not Found" });
+    }
+
+    const deletedSubAdmin = await User.findByIdAndUpdate(
+      { _id: subAdminid },
+      { $set: { status: "DELETED" } },
+      { new: true }
+    );
+
+    return res.status(200).json({ message: "Subadmin deleted successfully", deletedSubAdmin })
+
   } catch (error) {
-    console.error("Error saving user:", error);
+    console.error("Error deleting subadmin:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
 
 async function permissionGranting(req, res) {
   try {
-    const Id = req.user.id;
-    const { _id, username } = req.body;
-    const subAdmin = await User.findOne({
-      $or: [
-        { _id: Id, userType: "ADMIN" },
-        { username: username, userType: "SUBADMIN" },
-      ],
-    });
-    const data = await User.findOne({ _id: Id });
-    if (!data || !subAdmin) {
-      return res.status(404).json({ message: "User does not Exist" });
+    const userId = req.user.id;
+    const { _idorUsername } = req.body;
+
+    const user = await User.findOne({ _id: userId, userType: "ADMIN", status: "ACTIVE" })
+
+    if (!user) {
+      return res.status(404).json({ message: "User Not Found" });
     }
-    if (data.userType == "ADMIN") {
-      const permissiontoCreate = await User.findByIdAndUpdate(
-        { _id: _id },
-        { $set: { permissionGrant: true } },
-        { new: true }
-      );
-      x = await User.findOne({ userType: "ADMIN" });
-      console.log("=======>>>>>", x);
-      const pushUser = await User.findOneAndUpdate(
-        { userType: "ADMIN" },
-        { $push: { permissionsGranted: _id } },
-        { new: true }
-      );
-      console.log(pushUser);
-      res.status(200).json({
-        message: "Permission Updated Succesfully",
-        permissiontoCreate,
-        pushUser,
-      });
-    } else {
-      res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
+
+    if (user.userType !== "ADMIN") {
+      return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
     }
+
+    const subAdmin = await User.findOne({ $or: [{ _id: _idorUsername }, { username: _idorUsername }], userType: "SUBADMIN", status: "ACTIVE" });
+
+    if (!subAdmin) {
+      return res.status(404).json({ message: "SubAdmin Not Found" });
+    }
+
+    subAdmin.permissionGrant = true;
+    await subAdmin.save();
+
+    const pushUser = await User.findOneAndUpdate(
+      { userType: user._id },
+      { $addToSet: { permissionsGranted: subAdmin._id } },
+      { new: true }
+    );
+
+    return res.status(200).json({ message: "Permission Updated Successfully", permissionGrantedto: subAdmin._id, pushUser });
   } catch (error) {
-    console.error("Error saving user:", error);
+    console.error("Error granting permission:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+async function revokePermission(req, res) {
+  try {
+    const userId = req.user.id;
+    const { _idorUsername } = req.body;
+
+    const user = await User.findOne({ _id: userId, userType: "ADMIN", status: "ACTIVE" })
+
+    if (!user) {
+      return res.status(404).json({ message: "User Not Found" });
+    }
+
+    if (user.userType !== "ADMIN") {
+      return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
+    }
+
+    const subAdmin = await User.findOne({ $or: [{ _id: _idorUsername }, { username: _idorUsername }], userType: "SUBADMIN", status: "ACTIVE" });
+
+    if (!subAdmin) {
+      return res.status(404).json({ message: "SubAdmin Not Found" });
+    }
+
+    subAdmin.permissionGrant = false; // Revoke permission
+    await subAdmin.save();
+
+    const pullUser = await User.findByIdAndUpdate(
+      { _id : user._id },
+      { $pull: { permissionsGranted: subAdmin._id } },
+      { new: true }
+    );
+
+    return res.status(200).json({ message: "Permission Revoked Successfully", permissionRevokedFrom: subAdmin._id, pullUser });
+  } catch (error) {
+    console.error("Error revoking permission:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -369,27 +706,39 @@ async function permissionGranting(req, res) {
 async function twoFaRegister(req, res) {
   try {
     const Id = req.user.id;
-    const data = await User.findOne({ _id: Id });
+
+    const data = await User.findOne({ _id: Id, status: "ACTIVE" });
+
+    if (data.twoFaStatus === true) {
+
+      const updated = await User.findByIdAndUpdate(
+        { _id: Id },
+        { $set: { twoFaStatus: false, secretKey: null } },
+        { new: true }
+      );
+
+      return res.status(200).json({ message: "Two FA Disabled Successfully" })
+    }
 
     if (data) {
       const secret = speakeasy.generateSecret({ length: 20 });
-      console.log(secret);
+      // console.log(secret);
       const otp = speakeasy.totp({
         secret: secret.base32,
         encoding: "base32",
       });
-      console.log(otp);
-      let subject = "OTP for Two Step Verification";
-      let text = `Your OTP is: ${otp}.`;
-      await common.sendMail(data.email, subject, text);
-      const setSecretKey = await User.findOneAndUpdate(
-        { _id: data._id },
+      // console.log(otp);
+
+      // const subject = "OTP for Two Step Verification";
+      // const text = `Your OTP is: ${otp}.`;
+
+      const updated = await User.findByIdAndUpdate(
+        { _id: Id, status: "ACTIVE" },
         { $set: { twoFaStatus: true, secretKey: secret.base32 } },
         { new: true }
       );
-      return res
-        .status(200)
-        .json({ message: "OTP sent to you email successfully", otp });
+
+      return res.status(200).json({ message: "Two FA Enabled. Save this secret key into app like Google Authenticator to get the OTP. You will not see this key again", secret: secret.base32 });
     } else {
       return res.status(404).json({ message: "User not found" });
     }
@@ -399,398 +748,15 @@ async function twoFaRegister(req, res) {
   }
 }
 
-async function createCentre(req, res) {
-  try {
-    const userId = req.user.id;
-    const user = await User.findOne({ _id: userId });
-
-    if (!user) {
-      return res.status(404).json({ error: "User Not Found" });
-    }
-
-    const {
-      name,
-      availability,
-      date,
-      longitude,
-      latitude,
-      startTime,
-      endTime,
-      breakTimes,
-      slotDuration,
-    } = req.body;
-
-    if (
-      !name ||
-      !availability ||
-      !date ||
-      !longitude ||
-      !latitude ||
-      !startTime ||
-      !endTime ||
-      !breakTimes ||
-      !slotDuration
-    ) {
-      return res.status(405).json({ error: "All Fields Are Required" });
-    }
-
-    if (user.userType === "ADMIN" || user.userType === "SUBADMIN") {
-      const avDays = availability.map(common.numToDay);
-
-      const isoDate = new Date(date.split("/").reverse().join("-")).toISOString();
-
-      const existingCentre = await Centre.findOne({ name: name });
-
-      if (existingCentre) {
-        return res.status(409).json({
-          error:
-            "The Centre already exists.",
-        });
-      }
-
-      const day = new Date(isoDate).toDateString().slice(0, 3)
-
-      if (!avDays.includes(day)) {
-        return res.status(406).json({ message: `You have mentioned the centre is available ${avDays} but you mentioned the slots to be created on ${new Date(isoDate).toDateString()} which falls on ${day}` })
-      }
-
-      const location = [parseFloat(longitude), parseFloat(latitude)];
-      console.log(location);
-
-      const newCentre = new Centre({
-        name,
-        availability: avDays,
-        location: {
-          coordinates: [parseFloat(longitude), parseFloat(latitude)],
-        },
-        date: [
-          {
-            date: new Date(isoDate).toDateString(),
-            slots: common.createSlots(
-              startTime,
-              endTime,
-              breakTimes,
-              slotDuration
-            ),
-          },
-        ],
-      });
-      const savedCentre = await newCentre.save();
-
-      return res
-        .status(201)
-        .json({ message: "Centre created successfully", centre: savedCentre });
-    } else {
-      return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
-    }
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Internal Server Error" });
-  }
-}
-
-async function getCentreList(req, res) {
-  try {
-    const userId = req.user.id;
-    const user = await User.findOne({ _id: userId });
-
-    if (!user) {
-      return res.status(404).json({ error: "User Not Found" });
-    }
-    console.log(user.location.coordinates)
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-
-    const options = {
-      page,
-      limit,
-    };
-
-    const result = await Centre.aggregate([
-      {
-        $geoNear: {
-          near: {
-            type: "Point",
-            coordinates: [user.location.coordinates[0], user.location.coordinates[1]],
-          },
-          distanceField: "distance",
-          spherical: true,
-        },
-      },
-      {
-        $sort: {
-          distance: 1, // 1 for ascending, -1 for descending
-        },
-      },
-      { $match: { status: "ACTIVE" } },
-      { $skip: (page - 1) * limit },
-      { $limit: limit },
-    ]);
-
-    console.log(result)
-
-    const userData = result.map((i) => ({
-      _id: i._id,
-      name: i.name,
-      location: i.location,
-      daysAvailable: i.availability,
-      distance: i.distance,
-    }));
-
-    const pageInfo = {
-      total: userData.length,
-      currentPage: page,
-      perPage: limit,
-      totalPages: Math.ceil(userData.length / limit),
-    };
-    return res
-      .status(200)
-      .json({ message: "Centre Fetched Successfully", userData, pageInfo });
-  } catch (error) {
-    console.error(error);
-    return res
-      .status(500)
-      .json({ message: "Internal Server Error", error: error.message });
-  }
-}
-
-async function updateCentre(req, res) {
-  try {
-    const userId = req.user.id;
-    const userData = await User.findOne({ _id: userId });
-
-    if (!userData) {
-      return res.status(404).json({ error: "User Not Found" });
-    }
-
-    if (userData.userType === "ADMIN" || userData.userType === "SUBADMIN") {
-      const { id, name, availability, date, longitude, latitude, startTime, endTime, breakTimes, slotDuration } = req.body;
-
-      if (!name || !availability || !date || !longitude || !latitude || !startTime || !endTime || !breakTimes || !slotDuration) {
-        return res.status(405).json({ error: "All fields are Required" });
-      }
-
-      if (!id) {
-        return res.status(405).json({ error: "ID is Required" });
-      }
-
-      const avDays = availability.map((day) => common.numToDay(day));
-      const isoDate = new Date(
-        date.split("/").reverse().join("-")
-      ).toISOString();
-
-      const updatedCentre = await Centre.findOneAndUpdate(
-        { _id: id },
-        {
-          $set: {
-            name,
-            availability: avDays,
-            location: {
-              coordinates: [parseFloat(longitude), parseFloat(latitude)],
-            },
-            date: [
-              {
-                date: new Date(isoDate).toDateString(),
-                slots: common.createSlots(
-                  startTime,
-                  endTime,
-                  breakTimes,
-                  slotDuration
-                ),
-              },
-            ],
-          },
-        },
-        { new: true }
-      );
-
-      if (!updatedCentre) {
-        return res.status(404).json({ error: "Centre Not Found" });
-      }
-      return res
-        .status(200)
-        .json({ message: "Centre Updated Successfully", updatedCentre });
-
-    } else {
-      res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
-    }
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Internal Server Error" });
-  }
-}
-
-async function addSlots(req, res) {
-  try {
-    const userId = req.user.id;
-    const userData = await User.findOne({ _id: userId });
-
-    if (!userData) {
-      return res.status(404).json({ error: "User Not Found" });
-    }
-
-    if (userData.userType === "ADMIN" || userData.userType === "SUBADMIN") {
-      const { id, date, startTime, endTime, breakTimes, slotDuration } = req.body;
-
-      if (!id || !date || !startTime || !endTime || !breakTimes || !slotDuration) {
-        return res.status(400).json({ error: "All Fields Are Required" });
-      }
-
-      const isoDate = new Date(date.split("/").reverse().join("-")).toISOString();
-
-      const existingCentre = await Centre.findOne({ _id: id })
-      const daysArray = existingCentre.availability
-      const day = new Date(isoDate).toDateString().slice(0, 3)
-
-      if (!daysArray.includes(day)) {
-        return res.status(406).json({ message: "The centre is not available on this day" })
-      }
-      const isoDateToCheck = new Date(isoDate);
-
-      const dateExists = existingCentre.date.some((i) => {
-        const iDate = new Date(i.date);
-        return iDate.toISOString() === isoDateToCheck.toISOString();
-      });
-
-      if (dateExists) {
-        return res.status(409).json({ error: "Please specify another date. Slots for this date have already been created.", });
-      }
-      const centre = await Centre.findOneAndUpdate(
-        { _id: id, status: "ACTIVE" },
-        {
-          $push: {
-            date: [
-              {
-                date: new Date(isoDate).toDateString(),
-                slots: common.createSlots(startTime, endTime, breakTimes, slotDuration),
-              },
-            ],
-          },
-        },
-        { upsert: true, new: true }
-      )
-      if (!centre) {
-        return res.status(404).json({ error: "Centre Not Found or Not Active" });
-      }
-
-      return res.status(200).json({ message: "Slots added successfully", centre });
-    } else {
-      return res.status(403).json({ error: "Permission Denied" });
-    }
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Internal Server Error" });
-  }
-}
-
-async function getSlotsList(req, res) {
-  try {
-    const userId = req.user.id;
-    const user = await User.findOne({ _id: userId });
-
-    if (!user) {
-      return res.status(404).json({ error: "User Not Found" });
-    }
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-
-    const options = {
-      page,
-      limit,
-    };
-    const { centreId, date } = req.body
-
-    const isoDate = new Date(date.split("/").reverse().join("-")).toISOString();
-    console.log(new Date(isoDate).toDateString())
-    const result = await Centre.paginate(
-      { _id: centreId, 'date.date': new Date(isoDate).toDateString(), status: 'ACTIVE' },
-      options
-    );
-    // if (result.docs.length === 0) {
-    //   return res.status(404).json({ error: 'No slots available for the specified date' });
-    // }
-
-    console.log(result)
-
-    const slotsData = result.docs.map((center) => ({
-      name: center.name,
-      date: center.date.map((slot) => ({
-        slotTiming: slot.slotTiming,
-        available: slot.available,
-        user: slot.user,
-        _id: slot._id,
-        date: new Date(slot.date).toDateString(),
-        slots: slot.slots
-      })),
-    }));
-
-    const pageInfo = {
-      total: result.totalDocs,
-      currentPage: result.page,
-      perPage: result.limit,
-      totalPages: result.totalPages,
-    };
-    return res.status(200).json({ message: 'Slots Fetched Successfully', slotsData, pageInfo });
-
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal Server Error', error: error.message });
-  }
-}
-
-async function deleteCentre(req, res) {
-  try {
-    const userId = req.user.id;
-    const data = await User.findOne({ _id: userId });
-    const { centreId } = req.body;
-    if (!data) {
-      return res.status(404).json({ error: "User Not Found" });
-    }
-    if (!centreId) {
-      return res.status(404).json({ error: "centreId is required" });
-    }
-    if (data.userType == "ADMIN" || data.permissionGrant) {
-      const data = await Centre.findOne({ _id: centreId });
-      if (data) {
-        if (data.status == "DELETED") {
-          return res
-            .status(404)
-            .json({ error: "Specified Centre Is Already Deleted" });
-        }
-        const deletedCentre = await Centre.findByIdAndUpdate(
-          { _id: centreId },
-          {
-            $set: {
-              status: "DELETED",
-            },
-          },
-          { new: true }
-        );
-        return res
-          .status(200)
-          .json({ message: "Centre deleted successfully", deletedCentre });
-      } else {
-        return res.status(404).json({ error: "Specified Centre not found" });
-      }
-    } else {
-      return res.status(401).json({ message: "YOU ARE NOT AUTHORIZED" });
-    }
-  } catch (error) {
-    console.error("Error saving user:", error);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-}
-
 async function bookSlot(req, res) {
   try {
     const userId = req.user.id;
     const data = await User.findOne({ _id: userId, status: "ACTIVE" });
 
     const { centreName, date, inputTimeSlot } = req.body;
-    const isoDate = new Date(date.split("/").reverse().join("-")).toISOString();
-    const isoDateToCheck = new Date(isoDate).toDateString();
+
+    const isoDate = new Date(date.split("/").reverse().join("-"));
+    // const isoDateToCheck = new Date(isoDate).toDateString();
 
     if (!data) {
       return res.status(404).json({ error: "User Not Found" });
@@ -802,31 +768,42 @@ async function bookSlot(req, res) {
     const centre = await Centre.findOne({ name: centreName, status: "ACTIVE" })
 
     if (!centre) {
-      return res.status(404).json({ error: "centre Not Found" });
-    } else {
+      return res.status(404).json({ error: "Centre Not Found" });
+    }
+    else {
 
-      const dateExists = centre.date.some((i) => {
-        const iDate = new Date(i.date).toDateString();
-        return iDate === isoDateToCheck;
-      })
-
-      if (!dateExists) {
-        return res.status(409).json({ error: "Please specify another date. Centre will not be open on this date" });
-      }
-
-      const isBooked = centre.date.some(dateEntry => {
-        return dateEntry.slots.some(slot => slot.slotTiming === inputTimeSlot && slot.user.length === 0);
+      const dateEntry = centre.date.find((entry) => {
+        const iDate = new Date(entry.date);
+        return iDate.toISOString() === isoDate.toISOString();
       });
 
-      if (!isBooked) {
+      console.log("=====>isDateExists", !(!dateEntry))
+
+      if (!dateEntry) {
+        return res.status(409).json({
+          error: "Please specify another date. Centre will not be open on this date",
+        });
+      }
+
+      const slot = dateEntry.slots.find(
+        (slot) =>
+          slot.slotTiming === inputTimeSlot && slot.user.length === 0
+      );
+
+      console.log("=====>isBooked", !slot);
+
+      if (!slot) {
         return res.status(409).json({ error: "The Slot is already booked" });
       }
 
-      const available = centre.date.some(dateEntry => {
-        return dateEntry.slots.some(slot => slot.slotTiming === inputTimeSlot && slot.available);
-      });
+      const availableSlot = dateEntry.slots.find(
+        (slot) =>
+          slot.slotTiming === inputTimeSlot && slot.available === false
+      );
 
-      if (!available) {
+      console.log("=====>isAvailable", !availableSlot);
+
+      if (availableSlot) {
         return res.status(409).json({ error: "The Slot is on the breaktime" });
       }
     }
@@ -839,45 +816,44 @@ async function bookSlot(req, res) {
     };
 
     const payment = await razorpay.orders.create(options);
-    console.log("centreName, date, slot===?>>>", centreName, date, inputTimeSlot);
+    console.log("centreName, date, slot===?>>>", centreName, (isoDate).toISOString(), inputTimeSlot);
 
-    io.emit("start", (data) => {
-      centreName, date, inputTimeSlot, payment;
-      console.log("Transaction Initiated")
-    })
-
-    // const x = await Centre.findOne(
-    //   {
-    //     name: centreName,
-    //     'date.date': isoDateToCheck,
-    //     'date.slots.slotTiming': inputTimeSlot,
-    //   }
-    // )
-    // console.log("======>> x", x)
+    const x = await Centre.findOne(
+      {
+        name: centreName,
+        'date': {
+          $elemMatch: { date: new Date(isoDate).toISOString() }
+        },
+        'date.slots.slotTiming': inputTimeSlot,
+      }
+    )
+    console.log("======>> x", x)
 
     const updatedCentre = await Centre.findOneAndUpdate(
       {
         name: centreName,
-        'date.date': isoDateToCheck,
+        'date.date': new Date(isoDate).toISOString(),
         'date.slots.slotTiming': inputTimeSlot,
       },
       {
-        $set: {
-          'date.$.slots.$[inner].available': false,
-          'date.$.slots.$[inner].user': [userId],
-          'date.$.slots.$[inner].order_id': payment.id,
-        },
+        'date.$[outer].slots.$[inner].available': false,
+        'date.$[outer].slots.$[inner].user': [userId],
+        'date.$[outer].slots.$[inner].order_id': payment.id,
       },
       {
         arrayFilters: [
+          { 'outer.date': new Date(isoDate).toISOString() },
           { 'inner.slotTiming': inputTimeSlot },
         ],
         new: true,
       }
     );
 
-    console.log("==>>>>>>>>>updatedCentre",updatedCentre)
-    
+    console.log("==>>>>>>>>>updatedCentre", updatedCentre)
+
+    // io.emit("booked", { requestType: "booked", userId: userId },
+    //   console.log("============>>>       booked"));
+
     return res.status(200).json({ payment });
 
   } catch (error) {
@@ -926,16 +902,14 @@ async function webhook(req, res) {
       });
       await newUser.save();
 
-      res
-        .status(200)
-        .json({ message: "Webhook received successfully", newUser });
+      return res.status(200).json({ message: "Webhook received successfully", newUser });
     } else {
       // Signature is not valid, reject the request
       console.error("Invalid webhook signature");
-      res.status(400).json({ message: "Invalid signature" });
       io.on("start", (data) => {
         console.log(data)
       })
+      return res.status(400).json({ message: "Invalid signature" });
     }
   } catch (error) {
     console.error("Error processing webhook:", error);
@@ -947,19 +921,25 @@ async function webhook(req, res) {
 module.exports = {
   signup,
   login,
-  verifyOTP,
+  twoFAVerfication,
+
+  permissionGranting,
+  revokePermission,
   createSubAdmin,
   deleteSubAdmin,
-  resendOTP,
-  permissionGranting,
-  twoFaRegister,
-  createCentre,
-  updateCentre,
-  deleteCentre,
   getUserList,
-  getCentreList,
+
+  resendOTP,
+  verifyOTP,
+  twoFaRegister,
+  forgotPassword,
+  updatePassword,
+  resetPassword,
+  getUserProfile,
+  updateEmail,
+  deleteAccount,
+  updateUserProfile,
+
   bookSlot,
   webhook,
-  addSlots,
-  getSlotsList
 };

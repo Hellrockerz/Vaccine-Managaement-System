@@ -22,13 +22,16 @@ function verifyToken(req, res, next) {
     }
   }
 }
-function tokenGenerator(res, data) {
+function tokenGenerator(res, data, message) {
     const token = jwt.sign(
-      { id: data._id, username: data.username, password: data.password },
+      { id: data._id, username: data.username  },
       secretKey,
-      { expiresIn: "1d" }
+      { expiresIn: "30d" }
     );
     console.log(data);
+    if(message){
+      return res.status(201).json({ message: message, token, data })
+    }
     return res.status(201).json({ message: "Logged in successfully", token, data });
   }
   

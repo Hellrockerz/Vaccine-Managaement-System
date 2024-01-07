@@ -4,6 +4,7 @@ const USER = require("../models/userModel")
 const bcrypt = require('bcrypt')
 const speakeasy = require('speakeasy')
 const mongoosePaginate = require('mongoose-paginate-v2');
+const aggregatePaginate = require('mongoose-aggregate-paginate-v2')
 
 const staticSchema = new schema(
     {
@@ -28,6 +29,8 @@ const staticSchema = new schema(
     { timestamps: true }
 );
 staticSchema.plugin(mongoosePaginate);
+staticSchema.plugin(aggregatePaginate);
+
 const staticModel = mongoose.model("static", staticSchema);
 module.exports = staticModel;
 
