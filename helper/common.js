@@ -13,8 +13,8 @@ async function sendMail(email, subject, text) {
             port: 587,
             secure: true,
             auth: {
-                user: 'mukulgautam18112000@gmail.com',
-                pass: 'fgla kfik wycj dxub',
+                user: 'Enter your email address',
+                pass: 'Enter your password',
             },
         })
         let options = {
