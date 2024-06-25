@@ -37,7 +37,7 @@ pipeline {
                 script {
                     try {
                         // Restart the application using PM2
-                        bat 'sudo pm2 restart vaccine-management-system'
+                        bat 'pm2 restart vaccine-management-system'
 
                         // Set the build status to SUCCESS
                         env.BUILD_STATUS = 'SUCCESS'
