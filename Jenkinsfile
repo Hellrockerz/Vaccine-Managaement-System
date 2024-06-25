@@ -24,7 +24,7 @@ pipeline {
                 script {
                     try {
                         // Install project dependencies
-                        sh 'npm install'
+                        bat 'npm install'
                     } catch (Exception e) {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
@@ -37,7 +37,7 @@ pipeline {
                 script {
                     try {
                         // Restart the application using PM2
-                        sh 'sudo pm2 restart vaccine-management-system'
+                        bat 'sudo pm2 restart vaccine-management-system'
 
                         // Set the build status to SUCCESS
                         env.BUILD_STATUS = 'SUCCESS'
