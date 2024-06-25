@@ -11,7 +11,7 @@ pipeline {
                 script {
                     try {
                         // Clone the repository
-                        git url: env.GIT_REPO, branch: 'main
+                        git url: env.GIT_REPO
                     } catch (Exception e) {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
