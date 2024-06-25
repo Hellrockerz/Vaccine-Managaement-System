@@ -11,7 +11,7 @@ pipeline {
                 script {
                     try {
                         // Clone the repository
-                        git url: env.GIT_REPO
+                        git url: env.GIT_REPO, branch: 'main
                     } catch (Exception e) {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
@@ -24,7 +24,7 @@ pipeline {
                 script {
                     try {
                         // Install project dependencies
-                        sh 'yarn install'
+                        sh 'npm install'
                     } catch (Exception e) {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
