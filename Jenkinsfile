@@ -25,6 +25,7 @@ pipeline {
                     try {
                         // Install project dependencies
                         bat 'npm install'
+                        bat 'npm install -g pm2'
                     } catch (Exception e) {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
