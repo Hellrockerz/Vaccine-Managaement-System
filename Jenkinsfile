@@ -32,19 +32,6 @@ pipeline {
                 }
             }
         }
-        stage('Install PM2') {
-            steps {
-                script {
-                    try {
-                        // Install PM2 globally
-                        bat 'npm install -g pm2'
-                    } catch (Exception e) {
-                        env.BUILD_STATUS = 'FAILURE'
-                        throw e
-                    }
-                }
-            }
-        }
         stage('Deploy') {
             steps {
                 script {
