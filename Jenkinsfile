@@ -4,7 +4,6 @@ pipeline {
         PROJECT_NAME = 'Vaccine Management System'
         GIT_REPO = 'https://github.com/Hellrockerz/Vaccine-Management-System.git'
         BUILD_STATUS = '#'
-        PATH = "${tool 'NodeJS'}/bin:${env.PATH}"
     }
     stages {
         stage('Checkout') {
