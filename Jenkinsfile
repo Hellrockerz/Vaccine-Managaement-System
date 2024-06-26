@@ -37,7 +37,10 @@ pipeline {
                 script {
                     try {
                         // Restart the application using PM2
-                        bat 'node index.js'
+                        bat '''
+                        pm2 start index.js --name vaccine-management-system || pm2 restart vaccine-management-system
+                        pm2 save
+                        '''
 
                         // Set the build status to SUCCESS
                         env.BUILD_STATUS = 'SUCCESS'
