@@ -37,11 +37,7 @@ pipeline {
                 script {
                     try {
                         // Restart the application using PM2
-                        bat '''
-                        pm2 restart vaccine-management-system
-                        pm2 save
-                        '''
-
+                        bat '''pm2 restart index.js'''
                         // Set the build status to SUCCESS
                         env.BUILD_STATUS = 'SUCCESS'
                     } catch (Exception e) {
