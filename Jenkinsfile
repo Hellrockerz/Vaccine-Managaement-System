@@ -4,7 +4,18 @@ pipeline {
         PROJECT_NAME = 'Vaccine Management System'
         GIT_REPO = 'https://github.com/Hellrockerz/Vaccine-Management-System.git'
         BUILD_STATUS = '#'
+        // Add the global npm binaries path to PATH
+        PATH = "C:\\Users\\Admin\\AppData\\Roaming\\npm;${env.PATH}"
     }
+    stage('Debug Environment') {
+    steps {
+        script {
+            bat 'echo %PATH%'
+            bat 'npm --version'
+            bat 'pm2 --version'
+        }
+    }
+}
     stages {
         stage('Checkout') {
             steps {
@@ -25,6 +36,19 @@ pipeline {
                     try {
                         // Install project dependencies
                         bat 'npm install'
+                    } catch (Exception e) {
+                        env.BUILD_STATUS = 'FAILURE'
+                        throw e
+                    }
+                }
+            }
+        }
+        stage('Install PM2') {
+            steps {
+                script {
+                    try {
+                        // Ensure PM2 is installed globally
+                        bat 'npm install -g pm2'
                     } catch (Exception e) {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
