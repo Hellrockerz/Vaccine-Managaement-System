@@ -7,15 +7,6 @@ pipeline {
         // Add the global npm binaries path to PATH
         PATH = "C:\\Users\\Admin\\AppData\\Roaming\\npm;${env.PATH}"
     }
-    stage('Debug Environment') {
-    steps {
-        script {
-            bat 'echo %PATH%'
-            bat 'npm --version'
-            bat 'pm2 --version'
-        }
-    }
-}
     stages {
         stage('Checkout') {
             steps {
@@ -27,6 +18,15 @@ pipeline {
                         env.BUILD_STATUS = 'FAILURE'
                         throw e
                     }
+                }
+            }
+        }
+            stage('Debug Environment') {
+            steps {
+                script {
+                    bat 'echo %PATH%'
+                    bat 'npm --version'
+                    bat 'pm2 --version'
                 }
             }
         }
