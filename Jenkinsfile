@@ -21,15 +21,6 @@ pipeline {
                 }
             }
         }
-            stage('Debug Environment') {
-            steps {
-                script {
-                    bat 'echo %PATH%'
-                    bat 'npm --version'
-                    bat 'pm2 --version'
-                }
-            }
-        }
         stage('Install Dependencies') {
             steps {
                 script {
